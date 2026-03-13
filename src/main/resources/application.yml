@@ -1,0 +1,37 @@
+app:
+  kafka:
+    bootstrap-servers: localhost:29092
+    retry-topic: retry-topic
+    dead-letter-topic: dead-letter-topic
+    player-topic: player-topic
+    ticket-topic: ticket-topic
+    ticket-processed-topic: ticket-processed-topic
+    player-group-id: player-flink-group
+    ticket-group-id: ticket-flink-group
+    retry-group-id: retry-flink-group
+
+  clickhouse:
+    url: jdbc:clickhouse://localhost:8123/default?compress=false
+    username: default
+    password: password123
+
+  flink:
+    default-parallelism: 24
+    checkpoint-interval-ms: 60000
+    min-pause-between-checkpoints-ms: 30000
+    checkpoint-timeout-ms: 60000
+    checkpoint-storage: file:///tmp/flink-checkpoints
+
+  retry:
+    max-retry-count: 1
+    retry-backoff-ms: 0
+
+  redis:
+    host: localhost
+    port: 6379
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
