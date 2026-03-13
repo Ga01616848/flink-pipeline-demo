@@ -2,7 +2,7 @@ package com.example.flinkpipelinedemo.modules.wager.dedup;
 
 public interface WagerIdempotencyRepository {
 
-    boolean isProcessed(String idempotencyKey);
+    boolean tryMarkProcessed(String idempotencyKey);
 
-    void markProcessed(String idempotencyKey);
+    void unmarkProcessed(String idempotencyKey);
 }

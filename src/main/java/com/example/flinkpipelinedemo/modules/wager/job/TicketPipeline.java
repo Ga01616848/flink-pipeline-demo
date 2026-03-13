@@ -1,50 +1,49 @@
 package com.example.flinkpipelinedemo.modules.wager.job;
 
-import com.example.flinkpipelinedemo.infrastructure.retry.model.RetryEvent;
-import com.example.flinkpipelinedemo.modules.wager.enums.TicketStatus;
-import com.example.flinkpipelinedemo.modules.wager.model.TicketEvent;
-import com.example.flinkpipelinedemo.shared.config.AppProperties;
-import com.example.flinkpipelinedemo.shared.util.JsonUtils;
 import com.example.flinkpipelinedemo.application.pipeline.ticket.dto.TicketProcessedEvent;
-import com.example.flinkpipelinedemo.modules.wager.dedup.InMemoryWagerIdempotencyRepository;
+import com.example.flinkpipelinedemo.infrastructure.retry.model.RetryEvent;
 import com.example.flinkpipelinedemo.modules.wager.dedup.WagerIdempotencyRepository;
+import com.example.flinkpipelinedemo.modules.wager.enums.TicketStatus;
 import com.example.flinkpipelinedemo.modules.wager.exception.WagerProcessException;
+import com.example.flinkpipelinedemo.modules.wager.model.TicketEvent;
 import com.example.flinkpipelinedemo.modules.wager.service.WagerIdempotencyKeyResolver;
 import com.example.flinkpipelinedemo.modules.wager.service.WagerProcessResult;
 import com.example.flinkpipelinedemo.modules.wager.service.WagerProcessingService;
 import com.example.flinkpipelinedemo.modules.wager.sink.WagerClickHouseGateway;
+import com.example.flinkpipelinedemo.shared.config.AppProperties;
+import com.example.flinkpipelinedemo.shared.util.JsonUtils;
+import com.example.flinkpipelinedemo.modules.wager.sink.JdbcWagerClickHouseGateway;
+import com.example.flinkpipelinedemo.modules.wager.dedup.RedisWagerIdempotencyRepository;
+import java.time.Duration;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.async.RedisAsyncCommands;
-import org.apache.flink.connector.kafka.sink.KafkaSink;
-import org.apache.flink.connector.base.DeliveryGuarantee;
-import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
-import org.apache.flink.streaming.api.datastream.AsyncDataStream;
-import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
-import org.apache.flink.streaming.api.functions.ProcessFunction;
-import org.apache.flink.streaming.api.functions.async.ResultFuture;
-import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
-import org.apache.flink.util.Collector;
-import org.apache.flink.util.OutputTag;
-import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.base.DeliveryGuarantee;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MetricGroup;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.apache.flink.streaming.api.datastream.AsyncDataStream;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.streaming.api.functions.async.ResultFuture;
+import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
+import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.sql.Timestamp;
 import java.util.Collections;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -69,104 +68,83 @@ public class TicketPipeline {
         String ticketGroupId = props.getKafka().getTicketGroupId();
         String retryTopic = props.getKafka().getRetryTopic();
 
-        WagerClickHouseGateway clickHouseGateway = event -> {
-            // 先用 stub 模擬 ClickHouse 寫入成功
-        };
-
-        WagerIdempotencyRepository idempotencyRepository =
-                new InMemoryWagerIdempotencyRepository();
-
-        WagerProcessingService wagerProcessingService = new WagerProcessingService(
-                clickHouseGateway,
-                idempotencyRepository,
-                new WagerIdempotencyKeyResolver()
-        );
 
         KafkaSource<String> source = KafkaSource.<String>builder()
-                .setBootstrapServers(bootstrapServers)
-                .setTopics(ticketTopic)
-                .setGroupId(ticketGroupId)
-                .setStartingOffsets(OffsetsInitializer.latest())
-                .setValueOnlyDeserializer(new SimpleStringSchema())
-                .build();
+            .setBootstrapServers(bootstrapServers)
+            .setTopics(ticketTopic)
+            .setGroupId(ticketGroupId)
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new SimpleStringSchema())
+            .build();
 
         DataStream<String> stream =
-                env.fromSource(source, WatermarkStrategy.noWatermarks(), "Ticket Kafka Source")
-                        .setParallelism(PIPELINE_PARALLELISM);
+            env.fromSource(source, WatermarkStrategy.noWatermarks(), "Ticket Kafka Source")
+                .setParallelism(PIPELINE_PARALLELISM);
 
         SingleOutputStreamOperator<TicketEvent> ticketStream = stream
-                .process(new TicketEventProcessFunction(ticketTopic, RETRY_OUTPUT_TAG))
-                .name("ticket-parse-and-validate")
-                .setParallelism(PIPELINE_PARALLELISM);
+            .process(new TicketEventProcessFunction(ticketTopic, RETRY_OUTPUT_TAG))
+            .name("ticket-parse-and-validate")
+            .setParallelism(PIPELINE_PARALLELISM);
 
         DataStream<TicketEvent> enrichedTicketStream = AsyncDataStream.unorderedWait(
-                        ticketStream,
-                        new UpdatePlayerTotalBetRedisAsyncFunction(
-                                props.getRedis().getHost(),
-                                props.getRedis().getPort()
-                        ),
-                        3,
-                        TimeUnit.SECONDS,
-                        1000
-                ).name("update-player-total-bet-redis-async")
-                .setParallelism(PIPELINE_PARALLELISM);
+                ticketStream,
+                new UpdatePlayerTotalBetRedisAsyncFunction(
+                    props.getRedis().getHost(),
+                    props.getRedis().getPort()
+                ),
+                3,
+                TimeUnit.SECONDS,
+                1000
+            ).name("update-player-total-bet-redis-async")
+            .setParallelism(PIPELINE_PARALLELISM);
 
         KafkaSink<String> processedKafkaSink = KafkaSink.<String>builder()
-                .setBootstrapServers(bootstrapServers)
-                .setRecordSerializer(
-                        KafkaRecordSerializationSchema.builder()
-                                .setTopic(ticketProcessedTopic)
-                                .setValueSerializationSchema(new SimpleStringSchema())
-                                .build()
-                )
-                .setDeliveryGuarantee(DeliveryGuarantee.NONE)
-                .setKafkaProducerConfig(getProducerProps())
-                .build();
+            .setBootstrapServers(bootstrapServers)
+            .setRecordSerializer(
+                KafkaRecordSerializationSchema.builder()
+                    .setTopic(ticketProcessedTopic)
+                    .setValueSerializationSchema(new SimpleStringSchema())
+                    .build()
+            )
+            .setDeliveryGuarantee(DeliveryGuarantee.NONE)
+            .setKafkaProducerConfig(getProducerProps())
+            .build();
 
         KafkaSink<String> retryKafkaSink = KafkaSink.<String>builder()
-                .setBootstrapServers(bootstrapServers)
-                .setRecordSerializer(
-                        KafkaRecordSerializationSchema.builder()
-                                .setTopic(retryTopic)
-                                .setValueSerializationSchema(new SimpleStringSchema())
-                                .build()
-                )
-                .setDeliveryGuarantee(DeliveryGuarantee.NONE)
-                .setKafkaProducerConfig(getProducerProps())
-                .build();
+            .setBootstrapServers(bootstrapServers)
+            .setRecordSerializer(
+                KafkaRecordSerializationSchema.builder()
+                    .setTopic(retryTopic)
+                    .setValueSerializationSchema(new SimpleStringSchema())
+                    .build()
+            )
+            .setDeliveryGuarantee(DeliveryGuarantee.NONE)
+            .setKafkaProducerConfig(getProducerProps())
+            .build();
 
         DataStream<TicketEvent> wagerHandledStream = enrichedTicketStream
-                .map(new RichMapFunction<TicketEvent, TicketEvent>() {
-                    @Override
-                    public TicketEvent map(TicketEvent event) {
-                        WagerProcessResult result = wagerProcessingService.process(event);
-
-                        if (result == WagerProcessResult.WRITTEN) {
-                            return event;
-                        }
-
-                        if (result == WagerProcessResult.DUPLICATE_SKIPPED) {
-                            return event;
-                        }
-
-                        throw new WagerProcessException("Unexpected wager process result");
-                    }
-                })
-                .name("wager-clickhouse-idempotent-process")
-                .setParallelism(PIPELINE_PARALLELISM);
+            .map(new WagerProcessMapFunction(
+                props.getClickhouse().getUrl(),
+                props.getClickhouse().getUsername(),
+                props.getClickhouse().getPassword(),
+                props.getRedis().getHost(),
+                props.getRedis().getPort()
+            ))
+            .name("wager-clickhouse-idempotent-process")
+            .setParallelism(PIPELINE_PARALLELISM);
 
         wagerHandledStream
-                .map(TicketPipeline::toProcessedJson)
-                .setParallelism(PIPELINE_PARALLELISM)
-                .sinkTo(processedKafkaSink)
-                .name("ticket-processed-kafka-sink");
+            .map(TicketPipeline::toProcessedJson)
+            .setParallelism(PIPELINE_PARALLELISM)
+            .sinkTo(processedKafkaSink)
+            .name("ticket-processed-kafka-sink");
 
         ticketStream
-                .getSideOutput(RETRY_OUTPUT_TAG)
-                .map(JsonUtils::toJson)
-                .setParallelism(PIPELINE_PARALLELISM)
-                .sinkTo(retryKafkaSink)
-                .name("ticket-retry-kafka-sink");
+            .getSideOutput(RETRY_OUTPUT_TAG)
+            .map(JsonUtils::toJson)
+            .setParallelism(PIPELINE_PARALLELISM)
+            .sinkTo(retryKafkaSink)
+            .name("ticket-retry-kafka-sink");
     }
 
     public static class TicketEventProcessFunction extends ProcessFunction<String, TicketEvent> {
@@ -428,6 +406,82 @@ public class TicketPipeline {
             if (redisClient != null) {
                 redisClient.shutdown();
             }
+        }
+    }
+
+    public static class WagerProcessMapFunction extends RichMapFunction<TicketEvent, TicketEvent> {
+
+        private final String clickHouseUrl;
+        private final String clickHouseUsername;
+        private final String clickHousePassword;
+        private final String redisHost;
+        private final int redisPort;
+
+        private transient WagerProcessingService wagerProcessingService;
+        private transient LettuceConnectionFactory redisConnectionFactory;
+        private transient StringRedisTemplate redisTemplate;
+
+        public WagerProcessMapFunction(String clickHouseUrl,
+            String clickHouseUsername,
+            String clickHousePassword,
+            String redisHost,
+            int redisPort) {
+            this.clickHouseUrl = clickHouseUrl;
+            this.clickHouseUsername = clickHouseUsername;
+            this.clickHousePassword = clickHousePassword;
+            this.redisHost = redisHost;
+            this.redisPort = redisPort;
+        }
+
+        @Override
+        public void open(Configuration parameters) {
+            WagerClickHouseGateway clickHouseGateway = new JdbcWagerClickHouseGateway(
+                clickHouseUrl,
+                clickHouseUsername,
+                clickHousePassword
+            );
+
+            redisConnectionFactory = new LettuceConnectionFactory(redisHost, redisPort);
+            redisConnectionFactory.afterPropertiesSet();
+
+            redisTemplate = new StringRedisTemplate(redisConnectionFactory);
+            redisTemplate.afterPropertiesSet();
+
+            WagerIdempotencyRepository idempotencyRepository =
+                new RedisWagerIdempotencyRepository(
+                    redisTemplate,
+                    "wager:idempotency",
+                    Duration.ofDays(1)
+                );
+
+            wagerProcessingService = new WagerProcessingService(
+                clickHouseGateway,
+                idempotencyRepository,
+                new WagerIdempotencyKeyResolver()
+            );
+        }
+
+        @Override
+        public TicketEvent map(TicketEvent event) {
+            WagerProcessResult result = wagerProcessingService.process(event);
+
+            if (result == WagerProcessResult.WRITTEN) {
+                return event;
+            }
+
+            if (result == WagerProcessResult.DUPLICATE_SKIPPED) {
+                return event;
+            }
+
+            throw new WagerProcessException("Unexpected wager process result");
+        }
+
+        @Override
+        public void close() throws Exception {
+            if (redisConnectionFactory != null) {
+                redisConnectionFactory.destroy();
+            }
+            super.close();
         }
     }
 }

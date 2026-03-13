@@ -16,6 +16,8 @@ app:
     password: password123
 
   flink:
+    job:
+      enabled: true
     default-parallelism: 24
     checkpoint-interval-ms: 60000
     min-pause-between-checkpoints-ms: 30000

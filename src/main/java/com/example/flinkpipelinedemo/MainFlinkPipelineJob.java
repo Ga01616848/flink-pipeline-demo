@@ -7,9 +7,11 @@ import com.example.flinkpipelinedemo.shared.config.AppProperties;
 import com.example.flinkpipelinedemo.shared.config.FlinkEnvConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
+@ConditionalOnProperty(name = "app.flink.job.enabled", havingValue = "true", matchIfMissing = true)
 public class MainFlinkPipelineJob implements CommandLineRunner {
 
     private final AppProperties appProperties;
@@ -18,9 +20,9 @@ public class MainFlinkPipelineJob implements CommandLineRunner {
     private final RetryPipeline retryPipeline;
 
     public MainFlinkPipelineJob(AppProperties appProperties,
-                                PlayerPipeline playerPipeline,
-                                TicketPipeline ticketPipeline,
-                                RetryPipeline retryPipeline) {
+        PlayerPipeline playerPipeline,
+        TicketPipeline ticketPipeline,
+        RetryPipeline retryPipeline) {
         this.appProperties = appProperties;
         this.playerPipeline = playerPipeline;
         this.ticketPipeline = ticketPipeline;
@@ -33,17 +35,16 @@ public class MainFlinkPipelineJob implements CommandLineRunner {
         System.out.println("MainFlinkPipeline started");
 
         StreamExecutionEnvironment env = FlinkEnvConfig.createEnv(
-                appProperties.getFlink().getDefaultParallelism(),
-                appProperties.getFlink().getCheckpointIntervalMs(),
-                appProperties.getFlink().getCheckpointStorage(),
-                appProperties.getFlink().getMinPauseBetweenCheckpointsMs(),
-                appProperties.getFlink().getCheckpointTimeoutMs()
+            appProperties.getFlink().getDefaultParallelism(),
+            appProperties.getFlink().getCheckpointIntervalMs(),
+            appProperties.getFlink().getCheckpointStorage(),
+            appProperties.getFlink().getMinPauseBetweenCheckpointsMs(),
+            appProperties.getFlink().getCheckpointTimeoutMs()
         );
 
         playerPipeline.build(env);
         ticketPipeline.build(env);
         retryPipeline.build(env);
-
 
         env.execute("Flink-Pipeline-Main-Job");
     }

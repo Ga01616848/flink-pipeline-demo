@@ -1,20 +1,24 @@
 package com.example.flinkpipelinedemo.modules.wager.dedup;
 
+import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class InMemoryWagerIdempotencyRepository implements WagerIdempotencyRepository {
 
-    private final Set<String> processedKeys = ConcurrentHashMap.newKeySet();
+    private final Set<String> processedKeys = new HashSet<>();
 
     @Override
-    public boolean isProcessed(String idempotencyKey) {
-        return processedKeys.contains(idempotencyKey);
+    public boolean tryMarkProcessed(String idempotencyKey) {
+        if (processedKeys.contains(idempotencyKey)) {
+            return false;
+        }
+        processedKeys.add(idempotencyKey);
+        return true;
     }
 
     @Override
-    public void markProcessed(String idempotencyKey) {
-        processedKeys.add(idempotencyKey);
+    public void unmarkProcessed(String idempotencyKey) {
+        processedKeys.remove(idempotencyKey);
     }
 
     public int size() {

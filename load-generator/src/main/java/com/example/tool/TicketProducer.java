@@ -1,4 +1,4 @@
-package src.main.java.com.example.tool;
+package main.java.com.example.tool;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;

@@ -12,8 +12,8 @@ public class WagerProcessingService {
     private final WagerIdempotencyKeyResolver keyResolver;
 
     public WagerProcessingService(WagerClickHouseGateway clickHouseGateway,
-                                  WagerIdempotencyRepository idempotencyRepository,
-                                  WagerIdempotencyKeyResolver keyResolver) {
+        WagerIdempotencyRepository idempotencyRepository,
+        WagerIdempotencyKeyResolver keyResolver) {
         this.clickHouseGateway = clickHouseGateway;
         this.idempotencyRepository = idempotencyRepository;
         this.keyResolver = keyResolver;
@@ -23,18 +23,20 @@ public class WagerProcessingService {
         validate(event);
 
         String idempotencyKey = keyResolver.resolve(event);
-        if (idempotencyRepository.isProcessed(idempotencyKey)) {
+
+        boolean acquired = idempotencyRepository.tryMarkProcessed(idempotencyKey);
+        if (!acquired) {
             return WagerProcessResult.DUPLICATE_SKIPPED;
         }
 
         try {
             clickHouseGateway.upsert(event);
-            idempotencyRepository.markProcessed(idempotencyKey);
             return WagerProcessResult.WRITTEN;
         } catch (Exception ex) {
+            idempotencyRepository.unmarkProcessed(idempotencyKey);
             throw new WagerProcessException(
-                    "ClickHouse write failed, keep Kafka offset uncommitted for reconsume",
-                    ex
+                "ClickHouse write failed, keep Kafka offset uncommitted for reconsume",
+                ex
             );
         }
     }

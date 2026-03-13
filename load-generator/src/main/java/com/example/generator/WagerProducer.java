@@ -1,4 +1,4 @@
-package src.main.java.com.example.generator;
+package main.java.com.example.generator;
 
 import org.apache.kafka.clients.producer.*;
 
